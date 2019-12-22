@@ -19,13 +19,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"k8s.io/klog"
 	"math"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"k8s.io/klog"
 
 	"k8s.io/kubernetes/test/e2e/framework/metrics"
 	"k8s.io/kubernetes/test/e2e/perftype"
@@ -245,15 +246,15 @@ type latencyMetric struct {
 }
 
 type schedulingMetrics struct {
-	PredicateEvaluationLatency  latencyMetric `json:"predicateEvaluationLatency"`
-	PriorityEvaluationLatency   latencyMetric `json:"priorityEvaluationLatency"`
-	PreemptionEvaluationLatency latencyMetric `json:"preemptionEvaluationLatency"`
-	BindingLatency              latencyMetric `json:"bindingLatency"`
-	E2eSchedulingLatency        latencyMetric `json:"e2eSchedulingLatency"`
-	ThroughputAverage           float64       `json:"throughputAverage"`
-	ThroughputPerc50            float64       `json:"throughputPerc50"`
-	ThroughputPerc90            float64       `json:"throughputPerc90"`
-	ThroughputPerc99            float64       `json:"throughputPerc99"`
+	PredicateEvaluationDuration  histogramVec `json:"predicateEvaluationDuration"`
+	PriorityEvaluationDuration   histogramVec `json:"priorityEvaluationDuration"`
+	PreemptionEvaluationDuration histogramVec `json:"preemptionEvaluationDuration"`
+	BindingDuration              histogramVec `json:"bindingDuration"`
+	E2eSchedulingDuration        histogramVec `json:"e2eSchedulingDuration"`
+	ThroughputAverage            float64      `json:"throughputAverage"`
+	ThroughputPerc50             float64      `json:"throughputPerc50"`
+	ThroughputPerc90             float64      `json:"throughputPerc90"`
+	ThroughputPerc99             float64      `json:"throughputPerc99"`
 }
 
 func parseOperationLatency(latency latencyMetric, operationName string) perftype.DataItem {
@@ -273,6 +274,7 @@ func parseSchedulingLatency(data []byte, buildNumber int, testResult *BuildData)
 		return
 	}
 	predicateEvaluation := parseOperationLatency(obj.PredicateEvaluationLatency, "predicate_evaluation")
+	predicateEvaluation := parseHistogram(obj.PredicateEvaluationDuration, build)
 	testResult.Builds[build] = append(testResult.Builds[build], predicateEvaluation)
 	priorityEvaluation := parseOperationLatency(obj.PriorityEvaluationLatency, "priority_evaluation")
 	testResult.Builds[build] = append(testResult.Builds[build], priorityEvaluation)
@@ -282,6 +284,35 @@ func parseSchedulingLatency(data []byte, buildNumber int, testResult *BuildData)
 	testResult.Builds[build] = append(testResult.Builds[build], binding)
 	e2eSchedulingLatency := parseOperationLatency(obj.E2eSchedulingLatency, "e2eScheduling")
 	testResult.Builds[build] = append(testResult.Builds[build], e2eSchedulingLatency)
+}
+
+func parseScheduleingMetric(metricName string) func(data []byte, buildNumber int, testResult *BuildData) {
+	return func(data []byte, buildNumber int, testResult *BuildData) {
+		testResult.Version = "v1"
+		build := fmt.Sprintf("%d", buildNumber)
+		var obj etcdMetrics
+		if err := json.Unmarshal(data, &obj); err != nil {
+			klog.Errorf("error parsing JSON in build %d: %v %s", buildNumber, err, string(data))
+			return
+		}
+
+		var histogramVecMetric histogramVec
+		switch metricName {
+		case "backendCommitDuration":
+			histogramVecMetric = obj.BackendCommitDuration
+		case "snapshotSaveTotalDuration":
+			histogramVecMetric = obj.SnapshotSaveTotalDuration
+		case "peerRoundTripTime":
+			histogramVecMetric = obj.PeerRoundTripTime
+		case "walFsyncDuration":
+			histogramVecMetric = obj.WalFsyncDuration
+		default:
+			klog.Errorf("unknown metric name: %s", metricName)
+		}
+		if histogramVecMetric != nil {
+			testResult.Builds[build] = parseHistogram(histogramVecMetric, build)
+		}
+	}
 }
 
 type schedulingThroughputMetric struct {
@@ -323,7 +354,7 @@ type etcdMetrics struct {
 	MaxDatabaseSize           float64      `json:"maxDatabaseSize"`
 }
 
-func parseHistogramMetric(metricName string) func(data []byte, buildNumber int, testResult *BuildData) {
+func parseEtcdMetric(metricName string) func(data []byte, buildNumber int, testResult *BuildData) {
 	return func(data []byte, buildNumber int, testResult *BuildData) {
 		testResult.Version = "v1"
 		build := fmt.Sprintf("%d", buildNumber)
@@ -347,27 +378,33 @@ func parseHistogramMetric(metricName string) func(data []byte, buildNumber int, 
 			klog.Errorf("unknown metric name: %s", metricName)
 		}
 		if histogramVecMetric != nil {
-			for i := range histogramVecMetric {
-				perfData := perftype.DataItem{Unit: "%", Labels: histogramVecMetric[i].Labels, Data: make(map[string]float64)}
-				delete(perfData.Labels, "__name__")
-				count, exists := histogramVecMetric[i].Buckets["+Inf"]
-				if !exists {
-					klog.Errorf("err in build %d: no +Inf bucket: %s", buildNumber, string(data))
-					continue
-				}
-				for kBucket, vBucket := range histogramVecMetric[i].Buckets {
-					if kBucket != "+Inf" {
-						if count == 0 {
-							perfData.Data["<= "+kBucket+"s"] = 0
-							continue
-						}
-						perfData.Data["<= "+kBucket+"s"] = float64(vBucket) / float64(count) * 100
-					}
-				}
-				testResult.Builds[build] = append(testResult.Builds[build], perfData)
-			}
+			testResult.Builds[build] = parseHistogram(histogramVecMetric, build)
 		}
 	}
+}
+
+func parseHistogram(hist histogramVec, buildNumber string) []perftype.DataItem {
+	build := make([]perftype.DataItem, 0)
+	for i := range hist {
+		perfData := perftype.DataItem{Unit: "%", Labels: hist[i].Labels, Data: make(map[string]float64)}
+		delete(perfData.Labels, "__name__")
+		count, exists := hist[i].Buckets["+Inf"]
+		if !exists {
+			klog.Errorf("err in build %s: no +Inf bucket: %v", buildNumber, hist)
+			continue
+		}
+		for kBucket, vBucket := range hist[i].Buckets {
+			if kBucket != "+Inf" {
+				if count == 0 {
+					perfData.Data["<= "+kBucket+"s"] = 0
+					continue
+				}
+				perfData.Data["<= "+kBucket+"s"] = float64(vBucket) / float64(count) * 100
+			}
+		}
+		build = append(build, perfData)
+	}
+	return build
 }
 
 func parseSystemPodMetrics(data []byte, buildNumber int, testResult *BuildData) {

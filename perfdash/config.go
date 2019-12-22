@@ -19,10 +19,11 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"k8s.io/klog"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"k8s.io/klog"
 
 	"github.com/ghodss/yaml"
 )
@@ -179,42 +180,42 @@ var (
 			"DensityBackendCommitDuration": []TestDescription{{
 				Name:             "density",
 				OutputFilePrefix: "EtcdMetrics",
-				Parser:           parseHistogramMetric("backendCommitDuration"),
+				Parser:           parseEtcdMetric("backendCommitDuration"),
 			}},
 			"DensitySnapshotSaveTotalDuration": []TestDescription{{
 				Name:             "density",
 				OutputFilePrefix: "EtcdMetrics",
-				Parser:           parseHistogramMetric("snapshotSaveTotalDuration"),
+				Parser:           parseEtcdMetric("snapshotSaveTotalDuration"),
 			}},
 			"DensityPeerRoundTripTime": []TestDescription{{
 				Name:             "density",
 				OutputFilePrefix: "EtcdMetrics",
-				Parser:           parseHistogramMetric("peerRoundTripTime"),
+				Parser:           parseEtcdMetric("peerRoundTripTime"),
 			}},
 			"DensityWalFsyncDuration": []TestDescription{{
 				Name:             "density",
 				OutputFilePrefix: "EtcdMetrics",
-				Parser:           parseHistogramMetric("walFsyncDuration"),
+				Parser:           parseEtcdMetric("walFsyncDuration"),
 			}},
 			"LoadBackendCommitDuration": []TestDescription{{
 				Name:             "load",
 				OutputFilePrefix: "EtcdMetrics",
-				Parser:           parseHistogramMetric("backendCommitDuration"),
+				Parser:           parseEtcdMetric("backendCommitDuration"),
 			}},
 			"LoadSnapshotSaveTotalDuration": []TestDescription{{
 				Name:             "load",
 				OutputFilePrefix: "EtcdMetrics",
-				Parser:           parseHistogramMetric("snapshotSaveTotalDuration"),
+				Parser:           parseEtcdMetric("snapshotSaveTotalDuration"),
 			}},
 			"LoadPeerRoundTripTime": []TestDescription{{
 				Name:             "load",
 				OutputFilePrefix: "EtcdMetrics",
-				Parser:           parseHistogramMetric("peerRoundTripTime"),
+				Parser:           parseEtcdMetric("peerRoundTripTime"),
 			}},
 			"LoadWalFsyncDuration": []TestDescription{{
 				Name:             "load",
 				OutputFilePrefix: "EtcdMetrics",
-				Parser:           parseHistogramMetric("walFsyncDuration"),
+				Parser:           parseEtcdMetric("walFsyncDuration"),
 			}},
 		},
 		"Network": {

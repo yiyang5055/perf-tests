@@ -19,7 +19,6 @@ package common
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +27,6 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/master/ports"
-	schedulermetric "k8s.io/kubernetes/pkg/scheduler/metrics"
 	"k8s.io/kubernetes/pkg/util/system"
 	"k8s.io/perf-tests/clusterloader2/pkg/measurement"
 	measurementutil "k8s.io/perf-tests/clusterloader2/pkg/measurement/util"
@@ -38,10 +36,13 @@ import (
 const (
 	schedulerLatencyMetricName = "SchedulingMetrics"
 
-	e2eScheduling = "e2eScheduling"
+	singleRestCallTimeout = 5 * time.Minute
 
-	schedulingLatencyMetricName = model.LabelValue(schedulermetric.SchedulerSubsystem + "_" + schedulermetric.SchedulingLatencyName)
-	singleRestCallTimeout       = 5 * time.Minute
+	PredicateEvaluationDuration  = "scheduling_algorithm_predicate_evaluation_seconds_bucket"
+	PriorityEvaluationDuration   = "scheduling_algorithm_priority_evaluation_seconds_bucket"
+	PreemptionEvaluationDuration = "scheduling_algorithm_preemption_evaluation_seconds_bucket"
+	BindingDuration              = "binding_duration_seconds_bucket"
+	E2eSchedulingDuration        = "e2e_scheduling_duration_seconds_bucket"
 )
 
 func init() {
@@ -107,7 +108,7 @@ func (s *schedulerLatencyMeasurement) resetSchedulerMetrics(c clientset.Interfac
 
 // Retrieves scheduler latency metrics.
 func (s *schedulerLatencyMeasurement) getSchedulingLatency(c clientset.Interface, host, provider, masterName string) ([]measurement.Summary, error) {
-	result := schedulingMetrics{}
+	result := newSchedulingMetrics()
 	data, err := s.sendRequestToScheduler(c, "GET", host, provider, masterName)
 	if err != nil {
 		return nil, err
@@ -119,33 +120,24 @@ func (s *schedulerLatencyMeasurement) getSchedulingLatency(c clientset.Interface
 	}
 
 	for _, sample := range samples {
-		if sample.Metric[model.MetricNameLabel] != schedulingLatencyMetricName {
-			continue
-		}
-
-		var metric *measurementutil.LatencyMetric
-		switch sample.Metric[schedulermetric.OperationLabel] {
-		case schedulermetric.PredicateEvaluation:
-			metric = &result.PredicateEvaluationLatency
-		case schedulermetric.PriorityEvaluation:
-			metric = &result.PriorityEvaluationLatency
-		case schedulermetric.PreemptionEvaluation:
-			metric = &result.PreemptionEvaluationLatency
-		case schedulermetric.Binding:
-			metric = &result.BindingLatency
-		case e2eScheduling:
-			metric = &result.E2eSchedulingLatency
+		var metric *measurementutil.HistogramVec
+		switch sample.Metric[model.MetricNameLabel] {
+		case PredicateEvaluationDuration:
+			metric = &result.PredicateEvaluationDuration
+		case PriorityEvaluationDuration:
+			metric = &result.PriorityEvaluationDuration
+		case PreemptionEvaluationDuration:
+			metric = &result.PreemptionEvaluationDuration
+		case BindingDuration:
+			metric = &result.BindingDuration
+		case E2eSchedulingDuration:
+			metric = &result.E2eSchedulingDuration
 		}
 
 		if metric == nil {
 			continue
 		}
-
-		quantile, err := strconv.ParseFloat(string(sample.Metric[model.QuantileLabel]), 64)
-		if err != nil {
-			return nil, err
-		}
-		metric.SetQuantile(quantile, time.Duration(int64(float64(sample.Value)*float64(time.Second))))
+		measurementutil.ConvertSampleToBucket(sample, metric)
 	}
 
 	content, err := util.PrettyPrintJSON(result)
@@ -212,9 +204,19 @@ func (s *schedulerLatencyMeasurement) sendRequestToScheduler(c clientset.Interfa
 }
 
 type schedulingMetrics struct {
-	PredicateEvaluationLatency  measurementutil.LatencyMetric `json:"predicateEvaluationLatency"`
-	PriorityEvaluationLatency   measurementutil.LatencyMetric `json:"priorityEvaluationLatency"`
-	PreemptionEvaluationLatency measurementutil.LatencyMetric `json:"preemptionEvaluationLatency"`
-	BindingLatency              measurementutil.LatencyMetric `json:"bindingLatency"`
-	E2eSchedulingLatency        measurementutil.LatencyMetric `json:"e2eSchedulingLatency"`
+	PredicateEvaluationDuration  measurementutil.HistogramVec `json:"predicateEvaluationDuration"`
+	PriorityEvaluationDuration   measurementutil.HistogramVec `json:"priorityEvaluationDuration"`
+	PreemptionEvaluationDuration measurementutil.HistogramVec `json:"preemptionEvaluationDuration"`
+	BindingDuration              measurementutil.HistogramVec `json:"bindingDuration"`
+	E2eSchedulingDuration        measurementutil.HistogramVec `json:"e2eSchedulingDuration"`
+}
+
+func newSchedulingMetrics() *schedulingMetrics {
+	return &schedulingMetrics{
+		PredicateEvaluationDuration:  make(measurementutil.HistogramVec, 0),
+		PriorityEvaluationDuration:   make(measurementutil.HistogramVec, 0),
+		PreemptionEvaluationDuration: make(measurementutil.HistogramVec, 0),
+		BindingDuration:              make(measurementutil.HistogramVec, 0),
+		E2eSchedulingDuration:        make(measurementutil.HistogramVec, 0),
+	}
 }
